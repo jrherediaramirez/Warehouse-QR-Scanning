@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions (Custom Claims needed for these to work)
+    function isSignedIn() { return request.auth != null; }
+    function getUserRole() { return request.auth.token.role; }
+    function isAdmin() { return isSignedIn() && getUserRole() == 'admin'; }
+    function isQC() { return isSignedIn() && (getUserRole() == 'qc' || isAdmin()); }
+    function isUser() { return isSignedIn() && (getUserRole() == 'user' || isQC() || isAdmin()); }
+
+    // Hold Tags
+    match /holdTags/{tagId} {
+      allow get, list: if isSignedIn();
+      allow create: if isQC(); // Admin or QC
+      allow update: if isQC(); // For now, only QC/Admin can update
+
+      // Production Logs Subcollection
+      match /productionLogs/{logId} {
+        allow get, list: if isSignedIn();
+        allow create: if isUser() && request.resource.data.operatorId == request.auth.uid; // Any logged-in user can create their own log
+        allow update: if isQC(); // Only QC/Admin can approve/deny (will refine later)
+      }
+
+       // History Subcollection (Usually written by Cloud Functions - Read Only here)
+       match /history/{snapId} {
+         allow read: if isQC();
+         allow write: if false; // Prevent client-side writes
+       }
+    }
+
+    // QR Assignments
+    match /qrAssignments/{qrId} {
+      allow read: if isSignedIn();
+      allow write: if isQC(); // Only Admin or QC can manage QR codes
+    }
+
+    // Users
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin(); // Only Admins can manage users initially
+      allow update: if request.auth.uid == uid || isAdmin(); // Allow users to update some parts, Admin can update all
+    }
+  }
+}
